@@ -82,12 +82,13 @@ function RegistrationPage({ back }) {
         return;
       }
       const passwordHash = await hashPassword(formData.accountPassword);
+      const fullName = [formData.firstName, formData.middleName, formData.lastName].filter(Boolean).join(' ').trim();
       const registrationData = { ...formData, email, id: `MS-P-${Date.now()}`, submittedAt: new Date().toISOString() };
       delete registrationData.accountPassword;
       delete registrationData.confirmPassword;
       const saved = JSON.parse(localStorage.getItem('medisync-patient-registrations') || '[]');
       localStorage.setItem('medisync-patient-registrations', JSON.stringify([...saved, registrationData]));
-      localStorage.setItem('medisync-login-accounts', JSON.stringify([...accounts, { email, role: 'Patient', passwordHash }]));
+      localStorage.setItem('medisync-login-accounts', JSON.stringify([...accounts, { email, role: 'Patient', passwordHash, name: fullName }]));
       setError('');
       setSubmitted(true);
     } catch {
@@ -152,6 +153,21 @@ async function hashPassword(password) {
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
 }
 
+function nameFromEmail(email) {
+  const base = email.split('@')[0] || 'Portal User';
+  return base.split(/[._-]+/).filter(Boolean).map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(' ') || 'Portal User';
+}
+
+function getAccountName(account) {
+  if (account?.name?.trim()) return account.name.trim();
+  if (account?.role === 'Patient') {
+    const registrations = JSON.parse(localStorage.getItem('medisync-patient-registrations') || '[]');
+    const registration = registrations.find(item => item.email === account.email);
+    if (registration) return [registration.firstName, registration.middleName, registration.lastName].filter(Boolean).join(' ').trim();
+  }
+  return nameFromEmail(account?.email || 'portal.user@example.com');
+}
+
 function LoginModal({role,close,enter,register}) {
   const [email,setEmail] = useState(''); const [password,setPassword] = useState(''); const [error,setError] = useState(''); const [busy,setBusy] = useState(false);
   const roleLabel = role === 'Admin / Reception' ? 'Clinic admin' : role;
@@ -167,7 +183,7 @@ function LoginModal({role,close,enter,register}) {
         setBusy(false);
         return;
       }
-      enter(role);
+      enter(role, getAccountName(account));
     } catch {
       setError('Sign-in is unavailable in this browser.');
     }
@@ -188,7 +204,8 @@ function LoginModal({role,close,enter,register}) {
         return;
       }
       const passwordHash = await hashPassword(password);
-      localStorage.setItem('medisync-login-accounts', JSON.stringify([...accounts, { email: normalizedEmail, role, passwordHash }]));
+      const demoName = nameFromEmail(normalizedEmail);
+      localStorage.setItem('medisync-login-accounts', JSON.stringify([...accounts, { email: normalizedEmail, role, passwordHash, name: demoName }]));
       setEmail(normalizedEmail);
       setError('Local demo account created. Select Sign in to continue.');
     } catch {
@@ -204,45 +221,45 @@ function Sidebar({role,section,setSection,enterRole,setLanding}) {
   return <aside className="sidebar"><div className="sidebar-brand"><Logo/></div><nav>{config.links.map(([name,Icon])=> <button key={name} className={section===name?'active':''} onClick={()=>setSection(name)}><Icon size={18}/><span>{name}</span></button>)}</nav><div className="sidebar-bottom"><label>QUICK DEMO SWITCHER</label><select value={role} onChange={e=>{enterRole(e.target.value);setSection('Dashboard')}}><option>Patient</option><option>Doctor</option><option>Admin / Reception</option></select><button className="exit" onClick={setLanding}><LogOut size={16}/> Exit portal</button><span className="portal-label">{config.label}</span></div></aside>
 }
 
-function Portal({role,setRole,setLanding}) {
+function Portal({role,setRole,setLanding,userName}) {
   const [state,setState] = useStore(); const [section,setSection] = useState('Dashboard'); const [mobile,setMobile] = useState(false);
-  const addAudit=(action)=>setState(s=>({...s,audit:[{time:new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),user:'Amit Mishra',role,action,security:'Encrypted'},...s.audit]}));
-  return <div className="app-shell"><button className="mobile-menu" onClick={()=>setMobile(!mobile)}><Menu/></button><div className={mobile?'sidebar-mobile open':'sidebar-mobile'}><Sidebar role={role} section={section} setSection={n=>{setSection(n);setMobile(false)}} enterRole={setRole} setLanding={setLanding}/></div><div className="desktop-sidebar"><Sidebar role={role} section={section} setSection={setSection} enterRole={setRole} setLanding={setLanding}/></div><main className="portal-main">{role==='Patient'?<Patient state={state} setState={setState} section={section} setSection={setSection} addAudit={addAudit}/>:role==='Doctor'?<Doctor state={state} setState={setState} section={section} addAudit={addAudit}/>:<Admin state={state} setState={setState} section={section} addAudit={addAudit}/>}</main></div>
+  const addAudit=(action)=>setState(s=>({...s,audit:[{time:new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),user:userName,role,action,security:'Encrypted'},...s.audit]}));
+  return <div className="app-shell"><button className="mobile-menu" onClick={()=>setMobile(!mobile)}><Menu/></button><div className={mobile?'sidebar-mobile open':'sidebar-mobile'}><Sidebar role={role} section={section} setSection={n=>{setSection(n);setMobile(false)}} enterRole={setRole} setLanding={setLanding}/></div><div className="desktop-sidebar"><Sidebar role={role} section={section} setSection={setSection} enterRole={setRole} setLanding={setLanding}/></div><main className="portal-main">{role==='Patient'?<Patient state={state} setState={setState} section={section} setSection={setSection} addAudit={addAudit} userName={userName}/>:role==='Doctor'?<Doctor state={state} setState={setState} section={section} addAudit={addAudit}/>:<Admin state={state} setState={setState} section={section} addAudit={addAudit}/>}</main></div>
 }
 
 function PortalHeader({title,button,onButton}) { return <header className="portal-header"><div><span>Good morning,</span><h1>{title}</h1></div><div className="header-actions"><button className="icon-button"><Bell size={19}/><i/></button>{button&&<button className="btn-primary" onClick={onButton}>{button}</button>}</div></header> }
 
-function Patient({state,setState,section,setSection,addAudit}) {
+function Patient({state,setState,section,setSection,addAudit,userName}) {
   const [modal,setModal]=useState(null); const [booking,setBooking]=useState(false);
-  if(section==='Appointments') return <><PortalHeader title="Appointments" button="+ Book Appointment" onButton={()=>setBooking(true)}/><Appointments state={state} setState={setState} addAudit={addAudit} openBooking={()=>setBooking(true)}/> {booking&&<Booking onClose={()=>setBooking(false)} state={state} setState={setState} addAudit={addAudit}/>}</>;
-  if(section==='Medical Records') return <><PortalHeader title="Medical Records"/><Records state={state} setState={setState} modal={modal} setModal={setModal}/></>;
+  if(section==='Appointments') return <><PortalHeader title="Appointments" button="+ Book Appointment" onButton={()=>setBooking(true)}/><Appointments state={state} setState={setState} addAudit={addAudit} openBooking={()=>setBooking(true)}/> {booking&&<Booking onClose={()=>setBooking(false)} state={state} setState={setState} addAudit={addAudit} patientName={userName}/>}</>;
+  if(section==='Medical Records') return <><PortalHeader title="Medical Records"/><Records state={state} setState={setState} modal={modal} setModal={setModal} patientName={userName}/></>;
   if(section==='Billing & Payments') return <><PortalHeader title="Billing & Payments"/><Billing state={state} setState={setState} addAudit={addAudit}/></>;
-  return <><PortalHeader title="Amit Mishra" button="+ Book Appointment" onButton={()=>setBooking(true)}/><div className="dashboard-grid"><article className="action-card"><span className="card-label">UPCOMING APPOINTMENT</span><h3>{state.appointments[0]?.doctor||'No appointment'}</h3><p>{state.appointments[0]?.specialty||'Cardiology'} Department</p><div className="appointment-badge">TODAY • {state.appointments[0]?.time||'10:30 AM'}</div><div className="card-links"><button onClick={()=>setBooking(true)}>Reschedule</button><button onClick={()=>{setState(s=>({...s,appointments:s.appointments.slice(1)}));addAudit('Cancelled appointment')}}>Cancel</button></div></article><article className="action-card"><span className="card-label">RECENT RECORDS</span>{state.records.slice(0,2).map(r=><button className="record-link" key={r.id} onClick={()=>setModal(r)}><b>{r.title}</b><small>Ready to view</small></button>)}</article></div><div className="stats"><Stat label="Appointments" value={String(state.appointments.length).padStart(2,'0')} tone="teal"/><Stat label="Records" value={String(state.records.length).padStart(2,'0')} tone="blue"/><Stat label="Pending bill" value={`₹${state.invoices.filter(i=>i.status==='Pending').reduce((n,i)=>n+i.amount,0).toLocaleString('en-IN')}`} tone="amber"/></div>{modal&&<DocumentModal record={modal} close={()=>setModal(null)}/>} {booking&&<Booking onClose={()=>setBooking(false)} state={state} setState={setState} addAudit={addAudit}/>}</>;
+  return <><PortalHeader title={userName} button="+ Book Appointment" onButton={()=>setBooking(true)}/><div className="dashboard-grid"><article className="action-card"><span className="card-label">UPCOMING APPOINTMENT</span><h3>{state.appointments[0]?.doctor||'No appointment'}</h3><p>{state.appointments[0]?.specialty||'Cardiology'} Department</p><div className="appointment-badge">TODAY • {state.appointments[0]?.time||'10:30 AM'}</div><div className="card-links"><button onClick={()=>setBooking(true)}>Reschedule</button><button onClick={()=>{setState(s=>({...s,appointments:s.appointments.slice(1)}));addAudit('Cancelled appointment')}}>Cancel</button></div></article><article className="action-card"><span className="card-label">RECENT RECORDS</span>{state.records.slice(0,2).map(r=><button className="record-link" key={r.id} onClick={()=>setModal(r)}><b>{r.title}</b><small>Ready to view</small></button>)}</article></div><div className="stats"><Stat label="Appointments" value={String(state.appointments.length).padStart(2,'0')} tone="teal"/><Stat label="Records" value={String(state.records.length).padStart(2,'0')} tone="blue"/><Stat label="Pending bill" value={`₹${state.invoices.filter(i=>i.status==='Pending').reduce((n,i)=>n+i.amount,0).toLocaleString('en-IN')}`} tone="amber"/></div>{modal&&<DocumentModal record={modal} close={()=>setModal(null)} patientName={userName}/>} {booking&&<Booking onClose={()=>setBooking(false)} state={state} setState={setState} addAudit={addAudit} patientName={userName}/>}</>;
 }
 
 function Stat({label,value,tone}) { return <article className="stat"><span>{label}</span><strong>{value}</strong><i className={tone}/></article> }
 
 function Appointments({state,setState,addAudit,openBooking}) { return <><div className="section-card"><div className="section-heading"><h2>My appointments</h2><span className="role-badge-inline"><ShieldCheck size={14}/> 24/7 self-service</span></div>{state.appointments.length?<div className="appointment-list">{state.appointments.map(a=> <div className="appointment-row" key={a.id}><div className="date-block"><b>{a.time}</b><small>{a.date}</small></div><div><h3>{a.doctor}</h3><p>{a.specialty} • Room {a.room}</p></div><span className="status paid">{a.status}</span><div className="row-actions"><button onClick={openBooking}>Reschedule</button><button onClick={()=>{setState(s=>({...s,appointments:s.appointments.filter(x=>x.id!==a.id)}));addAudit('Cancelled appointment')}}>Cancel</button></div></div>)}</div>:<div className="empty">No appointments scheduled. <button onClick={openBooking}>Book one now</button></div>}</div></> }
 
-function Booking({onClose,state,setState,addAudit}) {
+function Booking({onClose,state,setState,addAudit,patientName}) {
   const [step,setStep]=useState(1); const [specialty,setSpecialty]=useState('Cardiology'); const [doctor,setDoctor]=useState('Dr. Amit Mishra'); const [slot,setSlot]=useState('10:30 AM');
   const doctors=[['Dr. Amit Mishra','12 yrs','10:30 AM'],['Dr. Riya Sharma','8 yrs','12:00 PM'],['Dr. Kabir Rao','15 yrs','03:30 PM']];
-  const confirm=()=>{const ap={id:Date.now(),patient:'Amit Mishra',doctor,specialty,date:'Tomorrow',time:slot,status:'Confirmed',room:'101'};setState(s=>({...s,appointments:[ap,...s],invoices:[{id:`MS-${Date.now().toString().slice(-4)}`,title:`${specialty} Consultation`,doctor,amount:1180,status:'Pending'},...s.invoices]}));addAudit(`Booked ${specialty} appointment with ${doctor}`);onClose();};
+  const confirm=()=>{const ap={id:Date.now(),patient:patientName,doctor,specialty,date:'Tomorrow',time:slot,status:'Confirmed',room:'101'};setState(s=>({...s,appointments:[ap,...s],invoices:[{id:`MS-${Date.now().toString().slice(-4)}`,title:`${specialty} Consultation`,doctor,amount:1180,status:'Pending'},...s.invoices]}));addAudit(`Booked ${specialty} appointment with ${doctor}`);onClose();};
   return <div className="modal-backdrop"><div className="booking-modal"><button className="modal-x" onClick={onClose}><X size={20}/></button><div className="wizard-layout"><aside><h3>Appointment</h3>{['Choose specialty','Choose doctor','Select slot','Confirm'].map((x,i)=><div key={x} className={step>=i+1?'step active':'step'}><b>{String(i+1).padStart(2,'0')}</b><span>{x}</span></div>)}</aside><section><span className="card-label">STEP {step} OF 4</span><h2>Book an appointment</h2>{step===1&&<><p>Select your preferred care option</p><div className="pills">{['CARDIOLOGY','GENERAL MEDICINE','ORTHOPEDICS','DERMATOLOGY','PEDIATRICS'].map(x=><button className={specialty.toUpperCase()===x?'selected':''} key={x} onClick={()=>setSpecialty(x==='CARDIOLOGY'?'Cardiology':x.toLowerCase().replace(/(^| )\w/g,c=>c.toUpperCase()))}>{x}</button>)}</div></>}{step===2&&<div className="doctor-list">{doctors.map(([d,exp,t])=><button className={doctor===d?'doctor selected':'doctor'} key={d} onClick={()=>{setDoctor(d);setSlot(t)}}><span>DR</span><div><b>{d}</b><small>{specialty} • {exp}</small></div><Clock3 size={16}/></button>)}</div>}{step===3&&<><p>Select an available time</p><div className="slots">{['09:30 AM','10:30 AM','12:00 PM','03:30 PM','04:30 PM'].map(t=><button className={slot===t?'selected':''} key={t} onClick={()=>setSlot(t)}>{t}</button>)}</div></>}{step===4&&<div className="booking-summary"><p><span>Specialty</span><b>{specialty}</b></p><p><span>Doctor</span><b>{doctor}</b></p><p><span>Date & time</span><b>Tomorrow • {slot}</b></p><p><span>Consultation fee</span><b>₹1,180</b></p></div>}<button className="btn-primary wide" onClick={()=>step<4?setStep(step+1):confirm()}>{step<4?'Continue →':'Confirm Booking'}</button></section></div></div></div>
 }
 
-function Records({state,modal,setModal}) {
+function Records({state,modal,setModal,patientName}) {
   const [filter,setFilter]=useState('ALL'); const visible=filter==='ALL'?state.records:state.records.filter(r=>r.category===filter);
-  return <div className="section-card records-card"><div className="section-heading"><h2>Medical Records</h2><span className="role-badge-inline"><ShieldCheck size={14}/> ROLE-BASED ACCESS</span></div><div className="tabs">{['ALL','LAB','RX'].map(t=><button className={filter===t?'selected':''} key={t} onClick={()=>setFilter(t)}>{t}</button>)}</div><div className="record-list">{visible.map(r=><div className="record-row" key={r.id}><div className="pdf-icon">PDF</div><div><h3>{r.title}</h3><p>{r.meta}</p></div><span className="ready">PDF • Ready</span><button onClick={()=>setModal(r)}>View</button></div>)}</div>{modal&&<DocumentModal record={modal} close={()=>setModal(null)}/>}</div>
+  return <div className="section-card records-card"><div className="section-heading"><h2>Medical Records</h2><span className="role-badge-inline"><ShieldCheck size={14}/> ROLE-BASED ACCESS</span></div><div className="tabs">{['ALL','LAB','RX'].map(t=><button className={filter===t?'selected':''} key={t} onClick={()=>setFilter(t)}>{t}</button>)}</div><div className="record-list">{visible.map(r=><div className="record-row" key={r.id}><div className="pdf-icon">PDF</div><div><h3>{r.title}</h3><p>{r.meta}</p></div><span className="ready">PDF • Ready</span><button onClick={()=>setModal(r)}>View</button></div>)}</div>{modal&&<DocumentModal record={modal} close={()=>setModal(null)} patientName={patientName}/>}</div>
 }
 
-function DocumentModal({record,close}) {
-  const download=()=>{const text=`MediSync Secure Record\n\nPatient: Amit Mishra\nID: MS-P-10042\nRecord: ${record.title}\nWatermark: Amit Mishra • ${new Date().toLocaleString()}\n\nThis is a simulated secure medical record.`;const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type:'text/plain'}));a.download=`${record.title.replaceAll(' ','-')}-Watermarked.txt`;a.click();};
-  return <div className="modal-backdrop"><div className="document-modal"><button className="modal-x" onClick={close}><X size={20}/></button><div className="doc-head"><div className="pdf-icon">PDF</div><div><span>MEDISYNC LABORATORY</span><h2>{record.title}</h2></div></div><div className="doc-watermark">AMIT MISHRA • MS-P-10042</div>{record.category==='LAB'?<table><thead><tr><th>Test</th><th>Result</th><th>Normal range</th></tr></thead><tbody><tr><td>Hemoglobin</td><td>14.2 g/dL</td><td>13.0–17.0</td></tr><tr><td>WBC Count</td><td>7.8 ×10³/µL</td><td>4.0–11.0</td></tr><tr><td>Platelets</td><td>260 ×10³/µL</td><td>150–410</td></tr></tbody></table>:<div className="prescription"><h3>Rx</h3><p><b>Tab. Metoprolol 25 mg</b><br/>One tablet once daily • 30 days</p><p><b>Tab. Ecosprin 75 mg</b><br/>One tablet after dinner • 30 days</p><small>Dr. Amit Mishra • Cardiology</small></div>}<button className="btn-primary wide" onClick={download}><Download size={18}/> Download Watermarked PDF</button></div></div>
+function DocumentModal({record,close,patientName}) {
+  const download=()=>{const text=`MediSync Secure Record\n\nPatient: ${patientName}\nID: MS-P-10042\nRecord: ${record.title}\nWatermark: ${patientName} • ${new Date().toLocaleString()}\n\nThis is a simulated secure medical record.`;const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type:'text/plain'}));a.download=`${record.title.replaceAll(' ','-')}-Watermarked.txt`;a.click();};
+  return <div className="modal-backdrop"><div className="document-modal"><button className="modal-x" onClick={close}><X size={20}/></button><div className="doc-head"><div className="pdf-icon">PDF</div><div><span>MEDISYNC LABORATORY</span><h2>{record.title}</h2></div></div><div className="doc-watermark">{patientName} • MS-P-10042</div>{record.category==='LAB'?<table><thead><tr><th>Test</th><th>Result</th><th>Normal range</th></tr></thead><tbody><tr><td>Hemoglobin</td><td>14.2 g/dL</td><td>13.0–17.0</td></tr><tr><td>WBC Count</td><td>7.8 ×10³/µL</td><td>4.0–11.0</td></tr><tr><td>Platelets</td><td>260 ×10³/µL</td><td>150–410</td></tr></tbody></table>:<div className="prescription"><h3>Rx</h3><p><b>Tab. Metoprolol 25 mg</b><br/>One tablet once daily • 30 days</p><p><b>Tab. Ecosprin 75 mg</b><br/>One tablet after dinner • 30 days</p><small>Dr. Amit Mishra • Cardiology</small></div>}<button className="btn-primary wide" onClick={download}><Download size={18}/> Download Watermarked PDF</button></div></div>
 }
 
 function Billing({state,setState,addAudit}) {
-  const [method,setMethod]=useState('UPI'); const [paid,setPaid]=useState(false); const pending=state.invoices.find(i=>i.status==='Pending')||state.invoices[0];
+  const [method,setMethod] = useState('UPI'); const [paid,setPaid] = useState(false); const pending = state.invoices.find(i=>i.status==='Pending')||state.invoices[0];
   const pay=()=>{setState(s=>({...s,invoices:s.invoices.map(i=>i.status==='Pending'?{...i,status:'Paid'}:i)}));setPaid(true);addAudit(`Processed ₹${pending?.amount||1180} payment via ${method}`)};
   const receipt=()=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([`MediSync Invoice\n#${pending?.id}\nAmount: ₹${pending?.amount}\nStatus: Paid\nPayment: ${method}`],{type:'text/plain'}));a.download=`MediSync-${pending?.id}-Receipt.txt`;a.click();};
   return <><div className="billing-grid"><article className="checkout-card"><h2>Payment summary</h2><div className="invoice"><span>INVOICE #{pending?.id||'—'}</span><h3>{pending?.title||'Cardiology Consultation'}</h3><p>{pending?.doctor||'Dr. Amit Mishra'}</p><div className="invoice-row"><span>Consultation</span><b>₹1,000</b></div><div className="invoice-row"><span>GST</span><b>₹180</b></div><hr/><div className="invoice-total"><span>Total</span><b>₹{(pending?.amount||1180).toLocaleString('en-IN')}</b></div></div></article><article className="checkout-card"><h2>Choose payment method</h2><div className="payment-options">{['UPI','Credit / Debit','Net Banking'].map(m=><button className={method===m?'selected':''} key={m} onClick={()=>setMethod(m)}><i/><span>{m}</span>{m==='UPI'&&<CreditCard size={20}/>}</button>)}</div>{method==='UPI'?<input className="upi-input" defaultValue="amit@upi"/>:method==='Credit / Debit'?<input className="upi-input" placeholder="Card number •••• ••••"/>:<select className="upi-input"><option>HDFC Bank</option><option>ICICI Bank</option><option>SBI</option></select>}<button className="btn-primary wide" onClick={pay}>{paid?'Paid successfully':'Pay ₹'+(pending?.amount||1180).toLocaleString('en-IN')}</button>{paid&&<button className="receipt" onClick={receipt}><Download size={16}/> Download invoice receipt</button>}</article></div><div className="section-card tracking"><div className="section-heading"><h2>Payment tracking & refunds</h2></div><table><thead><tr><th>Invoice</th><th>Amount</th><th>Status</th><th>Action</th></tr></thead><tbody>{state.invoices.map(i=><tr key={i.id}><td>{i.id}</td><td>₹{i.amount.toLocaleString('en-IN')}</td><td><span className={`status ${i.status.toLowerCase()}`}>{i.status}</span></td><td><button onClick={()=>alert('Refund request submitted for policy review')}>Request refund</button></td></tr>)}</tbody></table></div></>
@@ -263,5 +280,13 @@ function Admin({state,setState,section,addAudit}) {
   return <><PortalHeader title="Clinic Operations"/><div className="rooms-grid">{state.rooms.map((room,i)=><article className="room-card" key={room.id}><div className="room-top"><span>ROOM {room.id}</span><button onClick={()=>setState(s=>({...s,rooms:s.rooms.map(r=>r.id===room.id?{...r,status:r.status==='Available'?'Occupied':'Available'}:r)}))}>{room.status}</button></div><h3>{room.name}</h3><p>{room.doctor}</p><small>{room.status==='Available'?'Ready for assignment':room.status==='Occupied'?'Consultation in progress':'Under maintenance'}</small></article>)}</div><div className="section-card"><div className="section-heading"><h2>Live operations</h2><span className="ready"><CircleCheck size={13}/> Systems operational</span></div><div className="operations"><div><strong>18</strong><span>Appointments today</span></div><div><strong>6</strong><span>Patients waiting</span></div><div><strong>3</strong><span>Rooms occupied</span></div></div></div></>;
 }
 
-function App(){const [screen,setScreen]=useState('landing');const [role,setRole]=useState('Patient');if(screen==='register')return <RegistrationPage back={()=>setScreen('landing')}/>;return screen==='landing'?<Landing register={()=>setScreen('register')} enter={r=>{setRole(r);setScreen('portal')}}/>:<Portal role={role} setRole={setRole} setLanding={()=>setScreen('landing')}/>}
+function App(){
+  const [screen,setScreen]=useState('landing');
+  const [role,setRole]=useState('Patient');
+  const [userName,setUserName]=useState('Amit Mishra');
+  if(screen==='register') return <RegistrationPage back={()=>setScreen('landing')}/>;
+  return screen==='landing'
+    ? <Landing register={()=>setScreen('register')} enter={(selectedRole,accountName)=>{setRole(selectedRole);setUserName(accountName||nameFromEmail('portal.user@example.com'));setScreen('portal')}}/>
+    : <Portal role={role} setRole={setRole} setLanding={()=>setScreen('landing')} userName={userName}/>;
+}
 createRoot(document.getElementById('root')).render(<App/>);
